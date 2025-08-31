@@ -57,6 +57,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             select_contained = False, #If true, selects only clusters with original_atEdge==False
             noise = -1, #added gaussian noise (mu, sigma), set to -1 to turn off
             seed: int = None,
+            threshold = -1,
             quantize: bool = False,
             max_workers: int = 1,
             label_scale_pctl: float = 99,
@@ -114,6 +115,8 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             self.to_standardize = to_standardize
             self.noise = noise
             self.select_contained = select_contained
+            self.threshold = threshold
+
 
             self.process_file_parallel()
             
@@ -185,6 +188,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             "shuffle": self.shuffle,
             "noise": self.noise,
             "select_contained": self.select_contained,
+            "threshold": self.threshold,
             
             "seed": self.seed,
             "label_scale_pctl": self.label_scale_pctl,
@@ -253,13 +257,14 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         self.seed = metadata.get('seed', 13)
         self.transpose = metadata.get('transpose', None)
         self.noise = metadata.get('noise', -1)
+        self.threshold = metadata.get('threshold', -1)
         if self.shuffle:
             self.rng = np.random.default_rng(seed=self.seed)
             
 
     def process_file_parallel(self):
         file_infos = [(afile, 
-                    self.recon_cols, self.labels_list, self.noise, self.select_contained, 
+                    self.recon_cols, self.labels_list, self.noise, self.threshold, self.select_contained, 
                     self.label_scale_pctl, self.norm_pos_pctl, self.norm_neg_pctl) 
                     for afile in self.files
                     ]
@@ -300,7 +305,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
     @staticmethod
     def _process_file_single(file_info):
-        afile, recon_cols, labels_list, noise, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
+        afile, recon_cols, labels_list, noise, threshold, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
         if select_contained:
             df = (pd.read_parquet(afile, 
                                  columns=recon_cols + labels_list +['original_atEdge'])
@@ -316,6 +321,10 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         if noise != -1:
             bkg = np.random.normal(*noise, x.shape)
             x = x+bkg
+        if threshold != -1:
+            bellowthresh = x < threshold
+            x[bellowthresh] = 0*x[bellowthresh]
+            
         
         nonzeros = abs(x) > 0
         x[nonzeros] = np.sign(x[nonzeros]) * np.log1p(abs(x[nonzeros])) / math.log(2)
@@ -531,6 +540,9 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
                 if self.noise !=-1:
                     bkg = np.random.normal(*self.noise, recon_values.shape)
                     recon_values = recon_values + bkg
+                if self.threshold != -1: 
+                    bellowthresh = recon_values < self.threshold
+                    recon_values[bellowthresh] = 0*recon_values[bellowthresh]
                 nonzeros = abs(recon_values) > 0
                 recon_values[nonzeros] = np.sign(recon_values[nonzeros]) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
                 if self.to_standardize:
