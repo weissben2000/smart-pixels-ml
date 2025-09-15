@@ -329,10 +329,10 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             x = x+bkg
         if min_threshold is not None:
             bellowthresh = x < min_threshold
-            x[bellowthresh] = 0*x[bellowthresh]
+            x[bellowthresh] = 0
         if max_threshold is not None:
             abovethresh = x > max_threshold
-            x[abovethresh] = 0*x[abovethresh]
+            x[abovethresh] = max_threshold
             
         
         nonzeros = abs(x) > 0
@@ -551,10 +551,10 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
                     recon_values = recon_values + bkg
                 if self.min_threshold is not None: 
                     bellowthresh = recon_values < self.min_threshold
-                    recon_values[bellowthresh] = 0*recon_values[bellowthresh]
+                    recon_values[bellowthresh] = 0 
                 if self.max_threshold is not None: 
                     abovethresh = recon_values > self.max_threshold
-                    recon_values[abovethresh] = 0*recon_values[abovethresh]
+                    recon_values[abovethresh] = self.max_threshold 
                 
                 nonzeros = abs(recon_values) > 0
                 recon_values[nonzeros] = np.sign(recon_values[nonzeros]) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
