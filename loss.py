@@ -31,3 +31,14 @@ def custom_loss(y, p_base, minval=1e-9, maxval=1e9, scale = 512):
     NLL = -1*tf.math.log(likelihood)
 
     return tf.keras.backend.sum(NLL) 
+
+def SSIMLoss(y_true, y_pred, max_val = 3.0):
+    # max_val = max(max(y_true), max(y_pred))
+    # Calculate SSIM for each image in the batch
+    ssim_value = tf.image.ssim(y_true, max_val*y_pred, max_val=max_val)
+    # The loss is 1 - mean SSIM across the batch
+    return 1.0 - tf.reduce_mean(ssim_value)
+
+def PSNRLoss(y_true, y_pred, max_val=3.0):
+    psnr = tf.image.psnr(y_true, max_val*y_pred, max_val=max_val)
+    return -tf.reduce_mean(psnr)

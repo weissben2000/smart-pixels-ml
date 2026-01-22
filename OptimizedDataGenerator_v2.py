@@ -16,6 +16,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from tqdm import tqdm
 import tensorflow as tf
 from qkeras import quantized_bits
+from dataset_utils import quantize_manual
 
 import utils
 
@@ -45,6 +46,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             file_count = None,
             labels_list: Union[List,str] = ['x-midplane','y-midplane','cotAlpha','cotBeta'],
             to_standardize: bool = False,
+            log_scale: bool = True,
             input_shape: Tuple = (13,21),
             transpose = None,
             files_from_end = False,
@@ -59,6 +61,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             seed: int = None,
             min_threshold: float = None, #Zeros out charge<min_thresh
             max_threshold: float = None, #Zeros out charge>max_thresh
+            charge_thresholds = None, #list of n charge thresholds for n+1 input quantization bins. set to None for full precision inputs
             quantize: bool = False,
             max_workers: int = 1,
             label_scale_pctl: float = 99,
@@ -114,10 +117,12 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             self.input_shape = input_shape
             self.transpose = transpose
             self.to_standardize = to_standardize
+            self.log_scale = log_scale
             self.noise = noise
             self.select_contained = select_contained
             self.min_threshold = min_threshold
             self.max_threshold = max_threshold
+            self.charge_thresholds = charge_thresholds
             if (max_threshold is not None) and (min_threshold is not None) and (max_threshold < min_threshold):
                 raise ValueError("max_threshold < min_threshold!")
 
@@ -187,12 +192,14 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             "recon_cols": self.recon_cols,
             "labels_list": self.labels_list,
             "to_standardize": self.to_standardize,
+            "log_scale": self.log_scale,
             "transpose": self.transpose,
             "shuffle": self.shuffle,
             "noise": self.noise,
             "select_contained": self.select_contained,
             "min_threshold": self.min_threshold,
             "max_threshold": self.max_threshold,
+            "charge_thresholds": self.charge_thresholds,
             
             "seed": self.seed,
             "label_scale_pctl": self.label_scale_pctl,
@@ -238,6 +245,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         self.labels_list = metadata['labels_list']
         self.to_standardize = metadata['to_standardize']
         self.select_contained = metadata['select_contained']
+        self.log_scale = metadata['log_scale']
         self.label_scale_pctl = metadata['label_scale_pctl']
         self.norm_pos_pctl = metadata['norm_pos_pctl']
         self.norm_neg_pctl = metadata['norm_neg_pctl']
@@ -263,6 +271,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         self.noise = metadata.get('noise', -1)
         self.min_threshold = metadata.get('min_threshold', None)
         self.max_threshold = metadata.get('max_threshold', None)
+        self.charge_thresholds = metadata.get('charge_thresholds', None)
 
         if self.shuffle:
             self.rng = np.random.default_rng(seed=self.seed)
@@ -270,7 +279,8 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
     def process_file_parallel(self):
         file_infos = [(afile, 
-                    self.recon_cols, self.labels_list, self.noise, self.min_threshold, self.max_threshold, self.select_contained, 
+                    self.recon_cols, self.labels_list, self.log_scale, self.noise, 
+                    self.min_threshold, self.max_threshold, self.charge_thresholds, self.select_contained, 
                     self.label_scale_pctl, self.norm_pos_pctl, self.norm_neg_pctl) 
                     for afile in self.files
                     ]
@@ -311,7 +321,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
     @staticmethod
     def _process_file_single(file_info):
-        afile, recon_cols, labels_list, noise, min_threshold, max_threshold, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
+        afile, recon_cols, labels_list, log_scale, noise, min_threshold, max_threshold, charge_thresholds, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
         if select_contained:
             df = (pd.read_parquet(afile, 
                                  columns=recon_cols + labels_list +['original_atEdge'])
@@ -333,10 +343,13 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         if max_threshold is not None:
             abovethresh = x > max_threshold
             x[abovethresh] = max_threshold
-            
+        if charge_thresholds is not None:
+            x = quantize_manual(x, charge_thresholds, np.arange(len(charge_thresholds)+1)).values
         
         nonzeros = abs(x) > 0
-        x[nonzeros] = np.sign(x[nonzeros]) * np.log1p(abs(x[nonzeros])) / math.log(2)
+        if log_scale:
+            x[nonzeros] = np.sign(x[nonzeros]) * np.log1p(abs(x[nonzeros])) / math.log(2)
+            
         amean, avariance = np.mean(x[nonzeros], keepdims=True), np.var(x[nonzeros], keepdims=True) + 1e-10
         centered = np.zeros_like(x)
         centered[nonzeros] = (x[nonzeros] - amean) / np.sqrt(avariance)
@@ -525,17 +538,13 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
                 parquet_file = self.files[file_idx]
                 if self.select_contained:
                     all_columns_to_read = self.recon_cols + self.labels_list + ['original_atEdge']
-                    df = (pd.read_parquet(parquet_file, 
-                                         columns = all_columns_to_read)
-                            .dropna(subset=self.recon_cols)
-                            .reset_index(drop=True))
+                    df = pd.read_parquet(parquet_file, columns = all_columns_to_read
+                                        ).dropna(subset=self.recon_cols).reset_index(drop=True)
                     df = df.loc[df['original_atEdge'] == False]
                 else:
                     all_columns_to_read = self.recon_cols + self.labels_list
-                    df =(pd.read_parquet(parquet_file, 
-                                         columns = all_columns_to_read)
-                            .dropna(subset=self.recon_cols)
-                            .reset_index(drop=True))
+                    df = pd.read_parquet(parquet_file, columns = all_columns_to_read
+                                        ).dropna(subset=self.recon_cols).reset_index(drop=True)
                 # df = (pd.read_parquet(parquet_file,
                 #                     columns=self.recon_cols + self.labels_list)
                 #         .dropna(subset=self.recon_cols)
@@ -555,9 +564,15 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
                 if self.max_threshold is not None: 
                     abovethresh = recon_values > self.max_threshold
                     recon_values[abovethresh] = self.max_threshold 
-                
+                if self.charge_thresholds is not None:
+                    recon_values = quantize_manual(recon_values, self.charge_thresholds,
+                                                   np.arange(len(self.charge_thresholds)+1)).values
+
+                #log compress inputs
                 nonzeros = abs(recon_values) > 0
-                recon_values[nonzeros] = np.sign(recon_values[nonzeros]) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
+                if self.log_scale:
+                    recon_values[nonzeros] = np.sign(recon_values[nonzeros]
+                                                       ) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
                 if self.to_standardize:
                     recon_values[nonzeros] = self.standardize(recon_values[nonzeros])
                 recon_values = recon_values.reshape((-1, *self.input_shape))
