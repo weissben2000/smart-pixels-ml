@@ -46,7 +46,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             file_count = None,
             labels_list: Union[List,str] = ['x-midplane','y-midplane','cotAlpha','cotBeta'],
             to_standardize: bool = False,
-            log_scale: bool = True,
+            log_compression: bool = True,
             input_shape: Tuple = (13,21),
             transpose = None,
             files_from_end = False,
@@ -117,7 +117,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             self.input_shape = input_shape
             self.transpose = transpose
             self.to_standardize = to_standardize
-            self.log_scale = log_scale
+            self.log_compression = log_compression
             self.noise = noise
             self.select_contained = select_contained
             self.min_threshold = min_threshold
@@ -192,7 +192,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             "recon_cols": self.recon_cols,
             "labels_list": self.labels_list,
             "to_standardize": self.to_standardize,
-            "log_scale": self.log_scale,
+            "log_compression": self.log_compression,
             "transpose": self.transpose,
             "shuffle": self.shuffle,
             "noise": self.noise,
@@ -245,7 +245,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
         self.labels_list = metadata['labels_list']
         self.to_standardize = metadata['to_standardize']
         self.select_contained = metadata['select_contained']
-        self.log_scale = metadata['log_scale']
+        self.log_compression = metadata['log_compression']
         self.label_scale_pctl = metadata['label_scale_pctl']
         self.norm_pos_pctl = metadata['norm_pos_pctl']
         self.norm_neg_pctl = metadata['norm_neg_pctl']
@@ -279,7 +279,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
     def process_file_parallel(self):
         file_infos = [(afile, 
-                    self.recon_cols, self.labels_list, self.to_standardize, self.log_scale, self.noise, self.min_threshold, self.max_threshold, self.charge_thresholds, self.select_contained, 
+                    self.recon_cols, self.labels_list, self.to_standardize, self.log_compression, self.noise, self.min_threshold, self.max_threshold, self.charge_thresholds, self.select_contained, 
                     self.label_scale_pctl, self.norm_pos_pctl, self.norm_neg_pctl) 
                     for afile in self.files
                     ]
@@ -320,7 +320,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
     @staticmethod
     def _process_file_single(file_info):
-        afile, recon_cols, labels_list, to_standardize, log_scale, noise, min_threshold, max_threshold, charge_thresholds, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
+        afile, recon_cols, labels_list, to_standardize, log_compression, noise, min_threshold, max_threshold, charge_thresholds, select_contained, label_scale_pctl, norm_pos_pctl, norm_neg_pctl = file_info
         if select_contained:
             df = (pd.read_parquet(afile, 
                                  columns=recon_cols + labels_list +['original_atEdge'])
@@ -346,7 +346,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
             x = quantize_manual(x, charge_thresholds, np.arange(len(charge_thresholds)+1)).values
         
         nonzeros = abs(x) > 0
-        if log_scale:
+        if log_compression:
             x[nonzeros] = np.sign(x[nonzeros]) * np.log1p(abs(x[nonzeros])) / math.log(2)
             
         amean, avariance = np.mean(x[nonzeros], keepdims=True), np.var(x[nonzeros], keepdims=True) + 1e-10
@@ -573,7 +573,7 @@ class OptimizedDataGenerator(tf.keras.utils.Sequence):
 
                 #log compress inputs
                 nonzeros = abs(recon_values) > 0
-                if self.log_scale:
+                if self.log_compression:
                     recon_values[nonzeros] = np.sign(recon_values[nonzeros]
                                                        ) * np.log1p(abs(recon_values[nonzeros])) / np.log(2)
                 if self.to_standardize:
