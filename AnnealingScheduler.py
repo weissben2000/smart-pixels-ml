@@ -34,7 +34,7 @@ class AnnealingScheduler(tf.keras.callbacks.Callback):
         try:
             self.layer = self.model.get_layer(self.target_layer_name)
             if not isinstance(self.layer, SoftQuantizeLayer):
-                raise TypeError(f"Target layer {self.target_layer_name} must be a SoftQuantizeLayer.")
+                raise TypeError(f"Target layer {self.target_layer_name} must be a SoftQuantizeLayer. Instead it is a {type(self.layer)}")
         except ValueError:
             raise ValueError(f"Layer '{self.target_layer_name}' not found in model.")
         
